@@ -1,0 +1,619 @@
+---
+title: 'FB: Human or Robot?'
+author: "Peter Terlecky"
+date: "May 6, 2015"
+output: html_document
+---
+
+```{r libraries}
+library(plyr); library(dplyr); library(rpivotTable); library(data.table); library(bit64); library(Metrics); library(xgboost); library(caret);library(ggplot2); #library(R2HTML)
+```
+
+
+```{r}
+bids <- fread(input="bids.csv", header=TRUE)
+class(bids)
+#bids <- read.csv("bids.csv", header=T, stringsAsFactors = F)
+train <- read.csv("train.csv", header=T, stringsAsFactors = F)
+test <- read.csv("test.csv", header=T, stringsAsFactors = F)
+
+names(train)
+
+tr <- left_join(train, bids)
+tst <- left_join(test, bids)
+
+names(bids)
+names(tr)
+head(tr)
+table(tr$merchandise)
+
+names(train)
+
+```
+
+```{r train exploration}
+
+table(train$outcome)
+names(train)
+```
+
+```{r subsetting 1 and 0 and exploring}
+tr.1 <- subset(tr, outcome==1)
+tr.0 <- subset(tr, outcome==0)
+
+con.1 <- count(tr.1, country) %>% mutate(rate=n/nrow(tr.1)) %>% arrange(desc(rate))
+con.0 <- count(tr.0, country) %>% mutate(rate=n/nrow(tr.0)) %>% arrange(desc(rate))
+
+url.1 <- tr.1 %>% group_by(url) %>% summarise(n=n()) %>% mutate(rate=n/nrow(tr.1)) %>% arrange(desc(rate))
+url.0 <- tr.0 %>% group_by(url) %>% summarise(n=n()) %>% mutate(rate=n/nrow(tr.0)) %>% arrange(desc(rate))
+
+ip.1 <- count(tr.1, ip) %>% mutate(rate=n/nrow(tr.1)) %>% arrange(desc(rate))
+ip.0 <- count(tr.0, ip) %>% mutate(rate=n/nrow(tr.0)) %>% arrange(desc(rate))
+#class(tr$ip)
+
+mer.1 <- count(tr.1, merchandise) %>% mutate(rate=n/nrow(tr.1)) %>% arrange(desc(rate))
+mer.0 <- count(tr.0, merchandise) %>% mutate(rate=n/nrow(tr.0)) %>% arrange(desc(rate))
+
+
+ph.1 <- count(tr.1, device) %>% mutate(rate=n/nrow(tr.1)) %>% arrange(desc(rate))
+ph.0 <- count(tr.0, device) %>% mutate(rate=n/nrow(tr.0)) %>% arrange(desc(rate))
+
+auc.1 <- count(tr.1, auction) %>% mutate(rate=n/nrow(tr.1)) %>% arrange(desc(rate))
+auc.0 <- count(tr.0, auction) %>% mutate(rate=n/nrow(tr.0)) %>% arrange(desc(rate))
+
+```
+
+```{r exploring 2-way and more}
+tr.1 <- subset(tr, outcome==1)
+tr.0 <- subset(tr, outcome==0)
+
+con.mer.1 <- tr.1 %>% group_by(country, merchandise) %>% summarise(n=n())%>% mutate(rate=n/nrow(tr.1)) %>% arrange(desc(rate))
+con.mer.0 <- tr.0 %>% group_by(country, merchandise) %>% summarise(n=n())%>% mutate(rate=n/nrow(tr.0)) %>% arrange(desc(rate))
+
+url.mer.1 <- tr.1 %>% group_by(url, merchandise) %>% summarise(n=n())%>% mutate(rate=n/nrow(tr.1)) %>% arrange(desc(rate))
+url.mer.0 <- tr.0 %>% group_by(url, merchandise) %>% summarise(n=n())%>% mutate(rate=n/nrow(tr.0)) %>% arrange(desc(rate))
+
+url.mer.con.1 <- tr.1 %>% group_by(url, merchandise, country) %>% summarise(n=n())%>% mutate(rate=n/nrow(tr.1)) %>% arrange(desc(rate))
+url.mer.con.0 <- tr.0 %>% group_by(url, merchandise, country) %>% summarise(n=n())%>% mutate(rate=n/nrow(tr.0)) %>% arrange(desc(rate))
+
+con.ip.1 <- tr.1 %>% group_by(country, ip) %>% summarise(n=n())%>% mutate(rate=n/nrow(tr.1)) %>% arrange(desc(rate))
+con.ip.0 <- tr.0 %>% group_by(country, ip) %>% summarise(n=n())%>% mutate(rate=n/nrow(tr.0)) %>% arrange(desc(rate))
+
+dev.auc.1 <- tr.1 %>% group_by(device, auction) %>% summarise(n=n())%>% mutate(rate=n/nrow(tr.1)) %>% arrange(desc(rate))
+dev.auc.0 <- tr.0 %>% group_by(device, auction) %>% summarise(n=n())%>% mutate(rate=n/nrow(tr.0)) %>% arrange(desc(rate))
+
+
+```
+
+
+```{r removing missing bidder ids from training}
+
+tr <- na.omit(tr)
+```
+
+```{r 2 way feature creation}
+tr$us.sport <- ifelse(tr$country %in% 'us' & tr$merchandise %in% 'sporting goods',1,0)
+tst$us.sport <- ifelse(tst$country %in% 'us' & tst$merchandise %in% 'sporting goods',1,0)
+
+tr$in.sport <- ifelse(tr$country %in% 'in' & tr$merchandise %in% 'sporting goods',1,0)
+tst$in.sport <- ifelse(tst$country %in% 'in' & tst$merchandise %in% 'sporting goods',1,0)
+
+
+tr$ng.sport <- ifelse(tr$country %in% 'ng' & tr$merchandise %in% 'sporting goods',1,0)
+tst$ng.sport <- ifelse(tst$country %in% 'ng' & tst$merchandise %in% 'sporting goods',1,0)
+
+tr$in.jewel <- ifelse(tr$country %in% 'in' & tr$merchandise %in% 'jewelry',1,0)
+tst$in.jewel <- ifelse(tst$country %in% 'in' & tst$merchandise %in% 'jewelry',1,0)
+
+tr$v.us.sport <- ifelse(tr$country %in% 'us' & tr$merchandise %in% 'sporting goods' & tr$url %in% 'vasstdc27m7nks3',1,0)
+tst$v.us.sport <- ifelse(tst$country %in% 'us' & tst$merchandise %in% 'sporting goods' & tst$url %in% 'vasstdc27m7nks3',1,0)
+
+tr$ru.155 <- ifelse(tr$country %in% 'ru' & tr$ip %in% '155.231.50.85',1,0)
+tst$ru.155 <- ifelse(tst$country %in% 'ru' & tst$ip %in% '155.231.50.85',1,0)
+
+```
+
+
+
+```{r feature creation}
+tr$us <- ifelse(tr$country %in% 'us',1,0)
+tr$de <- ifelse(tr$country %in% 'de',1,0)
+tr$th <- ifelse(tr$country %in% 'th',1,0)
+
+tr$vass <- ifelse(tr$url %in% 'vasstdc27m7nks3', 1, 0)
+
+tr$ip155 <- ifelse(tr$ip %in% '155.231.50.85', 1, 0)
+
+
+tr$sport <- ifelse(tr$merchandise %in% 'sporting goods', 1, 0)
+tr$mobile <- ifelse(tr$merchandise %in% 'mobile', 1, 0)
+tr$jewelry <- ifelse(tr$merchandise %in% 'jewelry', 1, 0)
+tr$computers <- ifelse(tr$merchandise %in% 'computers', 1, 0) #somewhat low freq
+tr$auto.parts <- ifelse(tr$merchandise %in% 'auto parts', 1, 0) #somewhat low freq
+tr$furniture <- ifelse(tr$merchandise %in% 'furniture', 1, 0)
+tr$office.eq <- ifelse(tr$merchandise %in% 'office equipment', 1, 0)
+tr$home.goods <- ifelse(tr$merchandise %in% 'home goods', 1, 0)
+
+
+tr$phone4 <- ifelse(tr$ip %in% 'phone4', 1, 0)
+tr$phone119 <- ifelse(tr$ip %in% 'phone119', 1, 0)
+tr$phone46 <- ifelse(tr$ip %in% 'phone46', 1, 0)
+tr$phone17 <- ifelse(tr$ip %in% 'phone17', 1, 0) #not sure here
+
+tr$tme <- lead(tr$time)
+tr$l.bidder_id <- lead(tr$bidder_id)
+tr <- tr %>% group_by(bidder_id) %>% arrange(time) %>% ungroup()
+head(tr)
+tr$diff.time <- ifelse(tr$l.bidder_id==tr$bidder_id, tr$tme-tr$time, 0)
+tr[which(is.na(tr$diff.time)==T), 'diff.time'] <- 0
+
+head(tr)
+#Test set
+
+tst$us <- ifelse(tst$country %in% 'us',1,0)
+tst$de <- ifelse(tst$country %in% 'de',1,0)
+tst$th <- ifelse(tst$country %in% 'th',1,0)
+tst$vass <- ifelse(tst$url %in% 'vasstdc27m7nks3', 1, 0)
+tst$ip155 <- ifelse(tst$ip %in% '155.231.50.85', 1, 0)
+tst$sport <- ifelse(tst$merchandise %in% 'sporting goods', 1, 0)
+tst$mobile <- ifelse(tst$merchandise %in% 'mobile', 1, 0)
+tst$jewelry <- ifelse(tst$merchandise %in% 'jewelry', 1, 0)
+tst$computers <- ifelse(tst$merchandise %in% 'computers', 1, 0) #somewhat low freq
+tst$auto.parts <- ifelse(tst$merchandise %in% 'auto parts', 1, 0) #somewhat low freq
+tst$furniture <- ifelse(tst$merchandise %in% 'furniture', 1, 0)
+tst$office.eq <- ifelse(tst$merchandise %in% 'office equipment', 1, 0)
+tst$home.goods <- ifelse(tst$merchandise %in% 'home goods', 1, 0)
+
+tst$phone4 <- ifelse(tst$ip %in% 'phone4', 1, 0)
+tst$phone119 <- ifelse(tst$ip %in% 'phone119', 1, 0)
+tst$phone46 <- ifelse(tst$ip %in% 'phone46', 1, 0)
+tst$phone17 <- ifelse(tst$ip %in% 'phone17', 1, 0) #not sure here
+
+tst$tme <- lead(tst$time)
+tst$l.bidder_id <- lead(tst$bidder_id)
+tst <- tst %>% group_by(bidder_id) %>% arrange(time) %>% ungroup()
+head(tst)
+tst$diff.time <- ifelse(tst$l.bidder_id==tst$bidder_id, tst$tme-tst$time, 0)
+
+tst[which(is.na(tst$diff.time)==T), 'diff.time'] <- 0
+
+```
+
+
+```{r joined exploration}
+View(head(tr, n=50))
+View(head(tr[tr$outcome==1,]))
+tr[tr$outcome==1,]
+
+count(tr,country) %>% arrange(desc(n))
+
+```
+
+```{r group by bidder id}
+
+trn <- tr %>% group_by(bidder_id) %>% summarise(
+                                      cnt=n(),
+                                      dis.auctions.frac=n_distinct(auction)/cnt,
+                                      dis.countries.frac=n_distinct(country)/cnt,
+                                      dis.devices.frac=n_distinct(device)/cnt,
+                                      dis.ip.frac=n_distinct(ip)/cnt,
+                                      dis.merchandise.frac=n_distinct(merchandise)/cnt,
+                                      dis.url.frac=n_distinct(url)/cnt,
+                                      us.sum=sum(us),
+                                      de.sum=sum(de),
+                                      th.sum=sum(th),
+                                      v.url.sum=sum(vass),
+                                      ip155.sum=sum(ip155),
+                                      sport.sum=sum(sport),
+                                      mobile.sum=sum(mobile),
+                                      jewelry.sum=sum(jewelry),
+                                      #furniture.sum=sum(furniture),
+                                      comp.sum=sum(computers),
+                                      auto.sum=sum(auto.parts),
+                                      #phone4.sum=sum(phone4),
+                                      #phone119.sum=sum(phone119),
+                                      #phone46.sum=sum(phone46),
+                                      #phone17.sum=sum(phone17),
+                                      outcome=max(outcome))
+
+ts <- tst %>% group_by(bidder_id) %>% summarise(
+                                      cnt=n(),
+                                      dis.auctions.frac=n_distinct(auction)/cnt,
+                                      dis.countries.frac=n_distinct(country)/cnt,
+                                      dis.devices.frac=n_distinct(device)/cnt,
+                                      dis.ip.frac=n_distinct(ip)/cnt,
+                                      dis.merchandise.frac=n_distinct(merchandise)/cnt,
+                                      dis.url.frac=n_distinct(url)/cnt,
+                                      us.sum=sum(us),
+                                      de.sum=sum(de),
+                                      th.sum=sum(th),
+                                      v.url.sum=sum(vass),
+                                      ip155.sum=sum(ip155),
+                                      sport.sum=sum(sport),
+                                      mobile.sum=sum(mobile),
+                                      jewelry.sum=sum(jewelry),
+                                      #furniture.sum=sum(furniture),
+                                      comp.sum=sum(computers),
+                                      auto.sum=sum(auto.parts))
+                                      #phone4.sum=sum(phone4),
+                                      #phone119.sum=sum(phone119),
+                                      #phone46.sum=sum(phone46),
+                                      #phone17.sum=sum(phone17)
+                                      
+                                      
+
+
+```
+
+```{r round 2 - sum group by bidder id}
+
+trn <- tr %>% group_by(bidder_id) %>% summarise(
+                                      cnt=n(),
+                                      dis.auctions.frac=n_distinct(auction),
+                                      dis.countries.frac=n_distinct(country),
+                                      dis.devices.frac=n_distinct(device),
+                                      dis.ip.frac=n_distinct(ip),
+                                      dis.merchandise.frac=n_distinct(merchandise),
+                                      dis.url.frac=n_distinct(url),
+                                      us.rate=sum(us),
+                                      de.rate=sum(de),
+                                      th.rate=sum(th),
+                                      v.url.rate=sum(vass),
+                                      ip155.rate=sum(ip155),
+                                      sport.rate=sum(sport),
+                                      mobile.rate=sum(mobile),
+                                      jewelry.rate=sum(jewelry),
+                                      #furniture.sum=sum(furniture),
+                                      home.rate=sum(home.goods),
+                                      office.rate=sum(office.eq),
+                                      comp.rate=sum(computers),
+                                      auto.rate=sum(auto.parts),
+                                      #mean.time=1e6*sum(diff.time)/(cnt),
+                                      #phone4.sum=sum(phone4),
+                                      #phone119.sum=sum(phone119),
+                                      #phone46.sum=sum(phone46),
+                                      #phone17.sum=sum(phone17),
+                                      outcome=max(outcome))
+
+ts <- tst %>% group_by(bidder_id) %>% summarise(
+                                      cnt=n(),
+                                      dis.auctions.frac=n_distinct(auction),
+                                      dis.countries.frac=n_distinct(country),
+                                      dis.devices.frac=n_distinct(device),
+                                      dis.ip.frac=n_distinct(ip),
+                                      dis.merchandise.frac=n_distinct(merchandise),
+                                      dis.url.frac=n_distinct(url),
+                                      us.rate=sum(us),
+                                      de.rate=sum(de),
+                                      th.rate=sum(th),
+                                      v.url.rate=sum(vass),
+                                      ip155.rate=sum(ip155),
+                                      sport.rate=sum(sport),
+                                      mobile.rate=sum(mobile),
+                                      jewelry.rate=sum(jewelry),
+                                      #furniture.sum=sum(furniture),
+                                      comp.rate=sum(computers),
+                                      home.rate=sum(home.goods),
+                                      office.rate=sum(office.eq),
+                                      #mean.time=1e6*sum(diff.time)/(cnt),
+                                      auto.rate=sum(auto.parts))
+                                      #phone4.sum=sum(phone4),
+                                      #phone119.sum=sum(phone119),
+                                      #phone46.sum=sum(phone46),
+                                      #phone17.sum=sum(phone17)
+                                      
+                                      
+```
+
+
+```{r round 2 - group by bidder id}
+
+trn <- tr %>% group_by(bidder_id) %>% summarise(
+                                      cnt=n(),
+                                      dis.auctions.frac=n_distinct(auction)/cnt,
+                                      dis.countries.frac=n_distinct(country)/cnt,
+                                      dis.devices.frac=n_distinct(device)/cnt,
+                                      dis.ip.frac=n_distinct(ip)/cnt,
+                                      dis.merchandise.frac=n_distinct(merchandise)/cnt,
+                                      dis.url.frac=n_distinct(url)/cnt,
+                                      us.rate=sum(us)/cnt,
+                                      de.rate=sum(de)/cnt,
+                                      th.rate=sum(th)/cnt,
+                                      us.sport.rate=sum(us.sport)/cnt,
+                                      in.sport.rate=sum(in.sport)/cnt,
+                                      ng.sport.rate=sum(ng.sport)/cnt,
+                                      in.jewel.rate=sum(in.jewel)/cnt,
+                                      v.us.sport.rate=sum(v.us.sport)/cnt,
+                                      ru.155.rate=sum(ru.155)/cnt,
+                                      v.url.rate=sum(vass)/cnt,
+                                      ip155.rate=sum(ip155)/cnt,
+                                      sport.rate=sum(sport)/cnt,
+                                      mobile.rate=sum(mobile)/cnt,
+                                      jewelry.rate=sum(jewelry)/cnt,
+                                      #furniture.sum=sum(furniture),
+                                      home.rate=sum(home.goods)/cnt,
+                                      office.rate=sum(office.eq)/cnt,
+                                      comp.rate=sum(computers)/cnt,
+                                      auto.rate=sum(auto.parts)/cnt,
+                                      #mean.time=1e6*sum(diff.time)/(cnt),
+                                      #phone4.sum=sum(phone4),
+                                      #phone119.sum=sum(phone119),
+                                      #phone46.sum=sum(phone46),
+                                      #phone17.sum=sum(phone17),
+                                      outcome=max(outcome))
+
+ts <- tst %>% group_by(bidder_id) %>% summarise(
+                                      cnt=n(),
+                                      dis.auctions.frac=n_distinct(auction)/cnt,
+                                      dis.countries.frac=n_distinct(country)/cnt,
+                                      dis.devices.frac=n_distinct(device)/cnt,
+                                      dis.ip.frac=n_distinct(ip)/cnt,
+                                      dis.merchandise.frac=n_distinct(merchandise)/cnt,
+                                      dis.url.frac=n_distinct(url)/cnt,
+                                      us.rate=sum(us)/cnt,
+                                      de.rate=sum(de)/cnt,
+                                      th.rate=sum(th)/cnt,
+                                      us.sport.rate=sum(us.sport)/cnt,
+                                      in.sport.rate=sum(in.sport)/cnt,
+                                      ng.sport.rate=sum(ng.sport)/cnt,
+                                      in.jewel.rate=sum(in.jewel)/cnt,
+                                      v.us.sport.rate=sum(v.us.sport)/cnt,
+                                      ru.155.rate=sum(ru.155)/cnt,
+                                      v.url.rate=sum(vass)/cnt,
+                                      ip155.rate=sum(ip155)/cnt,
+                                      sport.rate=sum(sport)/cnt,
+                                      mobile.rate=sum(mobile)/cnt,
+                                      jewelry.rate=sum(jewelry)/cnt,
+                                      #furniture.sum=sum(furniture),
+                                      comp.rate=sum(computers)/cnt,
+                                      home.rate=sum(home.goods)/cnt,
+                                      office.rate=sum(office.eq)/cnt,
+                                      #mean.time=1e6*sum(diff.time)/(cnt),
+                                      auto.rate=sum(auto.parts)/cnt)
+                                      #phone4.sum=sum(phone4),
+                                      #phone119.sum=sum(phone119),
+                                      #phone46.sum=sum(phone46),
+                                      #phone17.sum=sum(phone17)
+                                      
+                                      
+```
+
+
+
+
+```{r subsetting where cnt>2}
+s <- subset(trn, cnt<=1)
+table(s$outcome)
+
+trn <- subset(trn, cnt>1)
+```
+
+
+```{r write trn ts}
+write.csv(trn, "trn.csv", row.names = F)
+write.csv(ts, "ts.csv", row.names = F)
+```
+
+
+```{r}
+boxplot(trn$cnt~ trn$outcome)
+```
+
+```{r formula}
+
+form <- 
+'outcome ~ 
+  cnt +
+  dis.auctions.frac +
+  dis.countries.frac +
+  dis.devices.frac + 
+  dis.ip.frac +
+  dis.merchandise.frac +
+  dis.url.frac + 
+  us.sum + 
+  th.sum + 
+  v.url.sum +
+  mobile.sum +
+  de.sum + 
+  jewelry.sum +
+  sport.sum +
+  comp.sum +
+  ip155.sum +
+  auto.sum'
+  
+
+form <- 
+'outcome ~ 
+  cnt +
+  dis.auctions.frac +
+  dis.countries.frac +
+  dis.devices.frac + 
+  dis.ip.frac +
+  dis.merchandise.frac +
+  dis.url.frac + 
+  us.rate + 
+  th.rate + 
+  v.url.rate +
+  de.rate +
+  mean.time' 
+  
+form <- 
+'outcome ~ 
+  dis.auctions.frac +
+  dis.countries.frac +
+  dis.devices.frac +
+  dis.url.frac + 
+  v.url.rate'
+  
+ 
+```
+
+```{r gbmGrid}
+gbmGrid <-  expand.grid(eta=c(0.05), 
+                       sbsample=c(.75), 
+                       mx.depth=c(15), 
+                       ntrees=c(100))
+
+```
+
+```{r}
+gbmGrid <-  expand.grid(eta=c(0.035, 0.05, 0.07), 
+                       sbsample=c(.5, .75, .85), 
+                       mx.depth=c(7, 10, 12, 15), 
+                       ntrees=c(50, 70, 100, 110))
+```
+
+
+```{r call crossVal ref.label=c('CrossVal function')}
+mean.met <- CrossVal(as.data.frame(trn), 'outcome', as.formula(form), 3, 5, gbmGrid)
+
+mean.met
+gbmGrid[which.max(mean.met), ]
+
+mean.met[which.max(mean.met)]
+
+test <- runXGB(as.data.frame(trn), as.data.frame(ts), as.formula(form), gbmGrid$ntrees[which.max(mean.met)],  gbmGrid$sbsample[which.max(mean.met)],gbmGrid$eta[which.max(mean.met)],gbmGrid$mx.depth[which.max(mean.met)], set.test=T)
+
+#names(test)
+Write(test)
+```
+
+
+```{r}
+
+ntrees <- 100
+eta <- .05
+sbsample <- .75
+mx.depth <- 15
+ 
+runXGB(trn,ts, as.formula(form), ntrees, sbsample, eta, mx.depth, set.test=F)
+
+all.vars(as.formula(form))
+```
+
+
+```{r runXGB function}
+############################################################################################################
+# Function to run extreme GBM model
+
+runXGB <- function(train, test, model, ntrees, sbsample, eta, mx.depth, set.test=F){
+
+  set.seed(5)
+  
+  xgbModel <- xgboost(data = as.matrix(train[, all.vars(model)[-1]]),
+                       label = as.matrix(train[, all.vars(model)[1]]),
+                       objective = 'binary:logistic',  # reg:linear (linear regression); binary:logistic (logistic regression for classification)
+                       nround = ntrees,  # maximum number of iterations
+                       subsample = sbsample, #.5, # subsample ratio of the training instance; adds randomness to prevent overfitting
+                       eta = eta, #0.05,  # step size of each boosting step
+                       max.depth = mx.depth, #20,  # maximum depth of the tree
+                       eval_metric='auc',
+                       verbose=1)  # 0: none; 1: performance info; 2: print all info
+  
+   
+  # Score
+  #train.score_xgb <- predict(xgbModel, as.matrix(train[, all.vars(model)[-1]]))
+
+  if(set.test==F){
+      test.score_xgb <- predict(xgbModel, as.matrix(test[, all.vars(model)[-1]]))
+      ac <- auc(test[, all.vars(model)[1]], test.score_xgb)
+      return(ac)
+  
+  }else{
+      test.score_xgb <- predict(xgbModel, as.matrix(test[, all.vars(model)[-1]]))
+
+# Get the feature real names
+      #print(all.vars(model))
+      #print(as.matrix(train[, all.vars(model)[-1]])[1:2,])
+      nms <- dimnames(as.matrix(train[, all.vars(model)[-1]]))[[2]]
+      #print(nms)
+
+# Compute feature importance matrix
+      #importance_matrix <- xgb.importance(as.matrix(train[, all.vars(model)[-1]])@Dimnames[[2]], model = xgbModel)
+      importance_matrix <- xgb.importance(nms, model = xgbModel)
+      print(importance_matrix)
+# Nice graph
+      print(xgb.plot.importance(importance_matrix))
+#set Predictions      
+      test$prediction <- test.score_xgb
+      return(test)
+      
+  }
+  
+}
+```
+
+```{r documenting results}
+sink('results.txt', append = T)
+
+print(Sys.time())
+cat("\n Predictors: \n")
+cat(form)
+cat('\n gbmGrid: \n')
+print(gbmGrid[which.max(mean.met), ])
+
+cat("\n CV AUC: \n")
+print(mean.met[which.max(mean.met)])
+cat("\nLeaderboard Score: \n")
+cat(".90940")
+cat("\n \n \n")
+sink()
+```
+
+
+```{r html output}
+HTMLStart(outdir="C:/Users/pterleck/Documents/FB_robot/FB_Robot",file="myreport", extension="html", echo=FALSE, HTMLframe=TRUE)
+dir.create(file.path(tempdir(),"R2HTML"))
+HTMLStart(file.path(tempdir(),"R2HTML"),file="myreport", extension="html", echo=FALSE, HTMLframe=TRUE)
+
+HTML.title("Results", HR=1)
+
+HTML.title("Predictors", HR=3)
+cat(form)
+
+HTML.title("Grid", HR=3)
+print(gbmGrid[which.max(mean.met), ])
+
+HTMLStop()
+```
+
+```{r CrossVal function }
+
+CrossVal <- function(data, y, mod, folds, number, params){
+  "y is the string name of the response"
+  "params is the data.frame of parameters"
+  "mod is formula already in formula form"
+  "requires Caret package"
+  set.seed(6)
+  
+  idx <- createMultiFolds(data[, y], k=folds, times=number)
+
+  #idx <- createFolds(data[, y], k=folds)
+  
+  mean.metric <- rep(0, nrow(params))
+  
+  for(j in 1:nrow(params)){
+    
+    auc <- rep(0, folds*number)
+
+    for(i in 1:(folds*number)){
+    
+      train <- as.data.frame(data[idx[[i]], ])
+      test <- as.data.frame(data[-idx[[i]], ])
+      #print(head(train))
+      #print(head(test))
+      auc[i] <- runXGB(train, test, mod, params$ntrees[j],
+                        params$sbsample[j], params$eta[j], params$mx.depth[j])
+    
+    }
+    mean.metric[j] <- mean(auc)
+  }
+  return(mean.metric)
+}
+```
+
+```{r csv file}
+Write <- function(test){
+  write.csv(select(test, bidder_id, prediction), "preds.csv", row.names = F)
+}
+```
